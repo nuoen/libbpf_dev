@@ -1,6 +1,7 @@
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <arpa/inet.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -12,6 +13,22 @@
 
 #include "libbpfstrace.h"
 #include "libbpfstrace.skel.h"
+
+#ifndef __NR_openat2
+#define __NR_openat2 437
+#endif
+#ifndef __NR_connect
+#define __NR_connect 203
+#endif
+#ifndef __NR_bind
+#define __NR_bind 200
+#endif
+#ifndef __NR_sendto
+#define __NR_sendto 206
+#endif
+#ifndef __NR_execve
+#define __NR_execve 221
+#endif
 
 static volatile sig_atomic_t exiting;
 
@@ -27,6 +44,48 @@ static int libbpf_print_fn(enum libbpf_print_level level, const char *fmt,
     if (level == LIBBPF_DEBUG)
         return 0;
     return vfprintf(stderr, fmt, args);
+}
+
+static const char *errno_name(int err)
+{
+    switch (err) {
+    case EPERM: return "EPERM";
+    case ENOENT: return "ENOENT";
+    case ESRCH: return "ESRCH";
+    case EINTR: return "EINTR";
+    case EIO: return "EIO";
+    case ENXIO: return "ENXIO";
+    case E2BIG: return "E2BIG";
+    case ENOEXEC: return "ENOEXEC";
+    case EBADF: return "EBADF";
+    case ECHILD: return "ECHILD";
+    case EAGAIN: return "EAGAIN";
+    case ENOMEM: return "ENOMEM";
+    case EACCES: return "EACCES";
+    case EFAULT: return "EFAULT";
+    case EBUSY: return "EBUSY";
+    case EEXIST: return "EEXIST";
+    case ENODEV: return "ENODEV";
+    case ENOTDIR: return "ENOTDIR";
+    case EISDIR: return "EISDIR";
+    case EINVAL: return "EINVAL";
+    case ENFILE: return "ENFILE";
+    case EMFILE: return "EMFILE";
+    case ENOTTY: return "ENOTTY";
+    case ETXTBSY: return "ETXTBSY";
+    case EFBIG: return "EFBIG";
+    case ENOSPC: return "ENOSPC";
+    case ESPIPE: return "ESPIPE";
+    case EROFS: return "EROFS";
+    case EMLINK: return "EMLINK";
+    case EPIPE: return "EPIPE";
+    case EDOM: return "EDOM";
+    case ERANGE: return "ERANGE";
+    case ENOSYS: return "ENOSYS";
+    case ECONNREFUSED: return "ECONNREFUSED";
+    case ETIMEDOUT: return "ETIMEDOUT";
+    default: return "ERR";
+    }
 }
 
 static const char *futex_op_name(unsigned long long op)
@@ -65,6 +124,47 @@ static const char *futex_op_name(unsigned long long op)
     }
 }
 
+static void format_sockaddr(const struct syscall_event *e, char *buf, size_t sz)
+{
+    if (!e->sa_valid) {
+        snprintf(buf, sz, "NULL");
+        return;
+    }
+
+    if (e->sa_family == AF_INET) {
+        struct in_addr a4;
+        char ip[INET_ADDRSTRLEN];
+
+        a4.s_addr = e->sa_addr4;
+        if (!inet_ntop(AF_INET, &a4, ip, sizeof(ip))) {
+            snprintf(buf, sz, "{sa_family=AF_INET, sin_port=%u, sin_addr=?}",
+                     ntohs(e->sa_port));
+            return;
+        }
+        snprintf(buf, sz, "{sa_family=AF_INET, sin_port=%u, sin_addr=\"%s\"}",
+                 ntohs(e->sa_port), ip);
+        return;
+    }
+
+    if (e->sa_family == AF_INET6) {
+        struct in6_addr a6;
+        char ip[INET6_ADDRSTRLEN];
+
+        memcpy(&a6, e->sa_addr6, sizeof(a6));
+        if (!inet_ntop(AF_INET6, &a6, ip, sizeof(ip))) {
+            snprintf(buf, sz, "{sa_family=AF_INET6, sin6_port=%u, sin6_addr=?}",
+                     ntohs(e->sa_port));
+            return;
+        }
+        snprintf(buf, sz,
+                 "{sa_family=AF_INET6, sin6_port=%u, sin6_addr=\"%s\", sin6_scope_id=%u}",
+                 ntohs(e->sa_port), ip, e->sa_scope_id);
+        return;
+    }
+
+    snprintf(buf, sz, "{sa_family=%u}", e->sa_family);
+}
+
 static void format_openat_flags(unsigned long long flags, char *buf, size_t sz)
 {
     size_t off = 0;
@@ -98,6 +198,13 @@ static void format_openat_flags(unsigned long long flags, char *buf, size_t sz)
 #undef APPEND_FLAG
 }
 
+static const char *arg_string(const struct syscall_event *e)
+{
+    if (e->str_len > 0 && e->str_len <= SYSCALL_STR_LEN)
+        return e->str;
+    return NULL;
+}
+
 static const char *syscall_name(int nr)
 {
     switch (nr) {
@@ -118,6 +225,8 @@ static const char *syscall_name(int nr)
 static void format_syscall_args(const struct syscall_event *e, const char *name, char *out,
                                 size_t out_sz)
 {
+    const char *s;
+
     switch (e->syscall_id) {
     case __NR_read:
         snprintf(out, out_sz, "%s(fd=%llu, buf=%#llx, count=%llu)",
@@ -140,9 +249,55 @@ static void format_syscall_args(const struct syscall_event *e, const char *name,
     case __NR_openat: {
         char flagbuf[256];
         format_openat_flags(e->args[2], flagbuf, sizeof(flagbuf));
-        snprintf(out, out_sz,
-                 "%s(dfd=%lld, pathname=%#llx, flags=%s, mode=%#llo)",
-                 name, (long long)e->args[0], e->args[1], flagbuf, e->args[3]);
+        s = arg_string(e);
+        if (s) {
+            snprintf(out, out_sz,
+                     "%s(dfd=%lld, pathname=\"%s\", flags=%s, mode=%#llo)",
+                     name, (long long)e->args[0], s, flagbuf, e->args[3]);
+        } else {
+            snprintf(out, out_sz,
+                     "%s(dfd=%lld, pathname=%#llx, flags=%s, mode=%#llo)",
+                     name, (long long)e->args[0], e->args[1], flagbuf, e->args[3]);
+        }
+        break;
+    }
+    case __NR_openat2: {
+        s = arg_string(e);
+        if (s) {
+            snprintf(out, out_sz,
+                     "%s(dfd=%lld, pathname=\"%s\", how=%#llx, size=%llu)",
+                     name, (long long)e->args[0], s, e->args[2], e->args[3]);
+        } else {
+            snprintf(out, out_sz,
+                     "%s(dfd=%lld, pathname=%#llx, how=%#llx, size=%llu)",
+                     name, (long long)e->args[0], e->args[1], e->args[2], e->args[3]);
+        }
+        break;
+    }
+    case __NR_execve:
+        s = arg_string(e);
+        if (s) {
+            snprintf(out, out_sz, "%s(filename=\"%s\", argv=%#llx, envp=%#llx)",
+                     name, s, e->args[1], e->args[2]);
+        } else {
+            snprintf(out, out_sz, "%s(filename=%#llx, argv=%#llx, envp=%#llx)",
+                     name, e->args[0], e->args[1], e->args[2]);
+        }
+        break;
+    case __NR_connect:
+    case __NR_bind:
+    case __NR_sendto: {
+        char addrbuf[192];
+        format_sockaddr(e, addrbuf, sizeof(addrbuf));
+        if (e->syscall_id == __NR_sendto) {
+            snprintf(out, out_sz,
+                     "%s(sockfd=%llu, buf=%#llx, len=%llu, flags=%#llx, dest_addr=%s, addrlen=%llu)",
+                     name, e->args[0], e->args[1], e->args[2], e->args[3], addrbuf, e->args[5]);
+        } else {
+            snprintf(out, out_sz,
+                     "%s(sockfd=%llu, addr=%s, addrlen=%llu)",
+                     name, e->args[0], addrbuf, e->args[2]);
+        }
         break;
     }
     case __NR_epoll_pwait:
@@ -163,6 +318,7 @@ static int handle_event(void *ctx, void *data, size_t data_sz)
     const struct syscall_event *e = data;
     const char *name;
     char callbuf[512];
+    char retbuf[128];
 
     (void)ctx;
     if (data_sz < sizeof(*e))
@@ -174,8 +330,15 @@ static int handle_event(void *ctx, void *data, size_t data_sz)
         name += 4;
 
     format_syscall_args(e, name, callbuf, sizeof(callbuf));
-    printf("pid=%d tid=%d comm=%s %s [id=%d]\n",
-           e->tgid, e->pid, e->comm, callbuf, e->syscall_id);
+    if (e->ret < 0) {
+        int err = (int)-e->ret;
+        snprintf(retbuf, sizeof(retbuf), "-1 %s (%s)", errno_name(err), strerror(err));
+    } else {
+        snprintf(retbuf, sizeof(retbuf), "%lld", e->ret);
+    }
+
+    printf("pid=%d tid=%d comm=%s %s = %s [id=%d]\n",
+           e->tgid, e->pid, e->comm, callbuf, retbuf, e->syscall_id);
     return 0;
 }
 
