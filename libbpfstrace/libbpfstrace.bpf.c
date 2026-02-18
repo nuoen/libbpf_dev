@@ -12,12 +12,17 @@ struct {
     __uint(max_entries, 1 << 24);
 } events SEC(".maps");
 
-SEC("tracepoint/syscalls/sys_enter")
-int handle_sys_enter(struct trace_event_raw_sys_enter *ctx)
+SEC("raw_tracepoint/sys_enter")
+int handle_sys_enter(struct bpf_raw_tracepoint_args *ctx)
 {
     struct syscall_event *e;
+    struct pt_regs *regs;
     u64 id;
+    long syscall_id;
     int tgid;
+
+    regs = (struct pt_regs *)ctx->args[0];
+    syscall_id = (long)ctx->args[1];
 
     id = bpf_get_current_pid_tgid();
     tgid = id >> 32;
@@ -31,14 +36,14 @@ int handle_sys_enter(struct trace_event_raw_sys_enter *ctx)
 
     e->tgid = tgid;
     e->pid = (int)id;
-    e->syscall_id = (int)ctx->id;
+    e->syscall_id = (int)syscall_id;
 
-    e->args[0] = ctx->args[0];
-    e->args[1] = ctx->args[1];
-    e->args[2] = ctx->args[2];
-    e->args[3] = ctx->args[3];
-    e->args[4] = ctx->args[4];
-    e->args[5] = ctx->args[5];
+    e->args[0] = PT_REGS_PARM1_CORE(regs);
+    e->args[1] = PT_REGS_PARM2_CORE(regs);
+    e->args[2] = PT_REGS_PARM3_CORE(regs);
+    e->args[3] = PT_REGS_PARM4_CORE(regs);
+    e->args[4] = PT_REGS_PARM5_CORE(regs);
+    e->args[5] = PT_REGS_PARM6_CORE(regs);
 
     bpf_get_current_comm(&e->comm, sizeof(e->comm));
     bpf_ringbuf_submit(e, 0);
