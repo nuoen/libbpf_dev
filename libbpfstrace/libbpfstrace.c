@@ -76,12 +76,44 @@ static int read_proc_comm(int pid, char *buf, size_t buf_sz)
     return 0;
 }
 
+static int read_proc_cmdline(int pid, char *buf, size_t buf_sz)
+{
+    char path[64];
+    FILE *fp;
+    size_t n;
+
+    snprintf(path, sizeof(path), "/proc/%d/cmdline", pid);
+    fp = fopen(path, "r");
+    if (!fp)
+        return -1;
+
+    n = fread(buf, 1, buf_sz - 1, fp);
+    fclose(fp);
+    if (n == 0)
+        return -1;
+
+    buf[n] = '\0';
+    return 0;
+}
+
+static int process_name_match(const char *target, const char *name)
+{
+    size_t len = strlen(target);
+
+    if (strcmp(target, name) == 0)
+        return 1;
+    if (strncmp(target, name, len) == 0 && name[len] == ':')
+        return 1;
+    return 0;
+}
+
 static int find_pid_by_name(const char *name, int *pid)
 {
     DIR *dir;
     struct dirent *de;
     char *end = NULL;
     char comm[256];
+    char cmdline[512];
 
     dir = opendir("/proc");
     if (!dir)
@@ -95,9 +127,15 @@ static int find_pid_by_name(const char *name, int *pid)
         if (errno || end == de->d_name || *end != '\0' || v <= 0 || v > 0x7fffffff)
             continue;
 
-        if (read_proc_comm((int)v, comm, sizeof(comm)) < 0)
-            continue;
-        if (strcmp(comm, name) == 0) {
+        if (read_proc_cmdline((int)v, cmdline, sizeof(cmdline)) == 0 &&
+            process_name_match(name, cmdline)) {
+            *pid = (int)v;
+            closedir(dir);
+            return 0;
+        }
+
+        if (read_proc_comm((int)v, comm, sizeof(comm)) == 0 &&
+            process_name_match(name, comm)) {
             *pid = (int)v;
             closedir(dir);
             return 0;
