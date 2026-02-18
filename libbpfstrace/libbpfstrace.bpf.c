@@ -1,6 +1,7 @@
 #include "vmlinux.h"
 #include "libbpfstrace.h"
 #include <bpf/bpf_helpers.h>
+#include <bpf/bpf_core_read.h>
 #include <bpf/bpf_tracing.h>
 
 char LICENSE[] SEC("license") = "Dual BSD/GPL";
@@ -43,7 +44,7 @@ int handle_sys_enter(struct bpf_raw_tracepoint_args *ctx)
     e->args[2] = PT_REGS_PARM3_CORE(regs);
     e->args[3] = PT_REGS_PARM4_CORE(regs);
     e->args[4] = PT_REGS_PARM5_CORE(regs);
-    e->args[5] = PT_REGS_PARM6_CORE(regs);
+    e->args[5] = BPF_CORE_READ(regs, regs[5]);
 
     bpf_get_current_comm(&e->comm, sizeof(e->comm));
     bpf_ringbuf_submit(e, 0);
