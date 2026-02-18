@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/syscall.h>
 #include <unistd.h>
 
 #include <bpf/libbpf.h>
@@ -27,19 +28,43 @@ static int libbpf_print_fn(enum libbpf_print_level level, const char *fmt,
     return vfprintf(stderr, fmt, args);
 }
 
+static const char *syscall_name(int nr)
+{
+    switch (nr) {
+#define __SYSCALL(n, call) case n: return #call;
+#define __SC_COMP(n, call, compat_call) __SYSCALL(n, call)
+#define __SC_3264(n, call32, call64) __SYSCALL(n, call64)
+#define __SC_COMP_3264(n, call32, call64, compat_call) __SYSCALL(n, call64)
+#include <asm/unistd.h>
+#undef __SC_COMP_3264
+#undef __SC_3264
+#undef __SC_COMP
+#undef __SYSCALL
+    default:
+        return "unknown";
+    }
+}
+
 static int handle_event(void *ctx, void *data, size_t data_sz)
 {
     const struct syscall_event *e = data;
+    const char *name;
 
     (void)ctx;
     if (data_sz < sizeof(*e))
         return 0;
 
-    printf("pid=%d tid=%d comm=%s syscall=%d(0x%x) args=[0x%llx, 0x%llx, 0x%llx, 0x%llx, 0x%llx, 0x%llx]\n",
+    name = syscall_name(e->syscall_id);
+
+    if (strncmp(name, "sys_", 4) == 0)
+        name += 4;
+
+    printf("pid=%d tid=%d comm=%s %s(%#llx, %#llx, %#llx, %#llx, %#llx, %#llx) [id=%d]\n",
            e->tgid, e->pid, e->comm,
-           e->syscall_id, e->syscall_id,
+           name,
            e->args[0], e->args[1], e->args[2],
-           e->args[3], e->args[4], e->args[5]);
+           e->args[3], e->args[4], e->args[5],
+           e->syscall_id);
     return 0;
 }
 
