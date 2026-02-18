@@ -64,7 +64,7 @@ endif
 CFLAGS += -g -Wall
 
 # ================== 项目列表 ==================
-PROJECTS := libbpfapp libbpfso
+PROJECTS := libbpfapp libbpfso libbpfstrace
 
 # 默认 APP（直接 make 时构建谁）
 APP ?= libbpfapp
