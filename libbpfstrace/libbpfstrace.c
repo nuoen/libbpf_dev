@@ -35,7 +35,7 @@ static const char *syscall_name(int nr)
 #define __SC_COMP(n, call, compat_call) __SYSCALL(n, call)
 #define __SC_3264(n, call32, call64) __SYSCALL(n, call64)
 #define __SC_COMP_3264(n, call32, call64, compat_call) __SYSCALL(n, call64)
-#include <asm/unistd.h>
+#include "../akita-include/kernel-headers/include/uapi/asm-generic/unistd.h"
 #undef __SC_COMP_3264
 #undef __SC_3264
 #undef __SC_COMP
