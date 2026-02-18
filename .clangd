@@ -1,0 +1,18 @@
+If:
+  PathMatch: .*\.bpf\.c$
+CompileFlags:
+  Add:
+    - -target
+    - bpf
+    - -D__TARGET_ARCH_arm64
+---
+If:
+  PathMatch: .*\.(c|cc|cpp|cxx)$
+CompileFlags:
+  Add:
+    - --sysroot=/home/mi/android-ndk/toolchains/llvm/prebuilt/linux-x86_64/sysroot
+    - -isystem
+    - /home/mi/android-ndk/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include
+    - -isystem
+    - /home/mi/android-ndk/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include/aarch64-linux-android
+    - -D__ANDROID_API__=29

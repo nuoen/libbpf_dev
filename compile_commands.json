@@ -1,0 +1,46 @@
+[
+  {
+    "arguments": [
+      "/home/mi/android-ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android29-clang",
+      "-g",
+      "-Wall",
+      "-O2",
+      "-target",
+      "bpf",
+      "-D__TARGET_ARCH_arm64",
+      "-Ilibbpfso/out",
+      "-I./ebpf-android-sdk/include",
+      "-I./ebpf-android-sdk/vmlinux/arm64/",
+      "-idirafter",
+      "/home/mi/android-ndk/toolchains/llvm/prebuilt/linux-x86_64/lib/clang/17/include",
+      "-idirafter",
+      "/home/mi/android-ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/../sysroot/usr/include/aarch64-linux-android",
+      "-idirafter",
+      "/home/mi/android-ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/../sysroot/usr/include",
+      "-c",
+      "-o",
+      "libbpfso/out/libbpfso.bpf.o",
+      "libbpfso/libbpfso.bpf.c"
+    ],
+    "directory": "/home/mi/1t/libbpf_dev",
+    "file": "/home/mi/1t/libbpf_dev/libbpfso/libbpfso.bpf.c",
+    "output": "/home/mi/1t/libbpf_dev/libbpfso/out/libbpfso.bpf.o"
+  },
+  {
+    "arguments": [
+      "/home/mi/android-ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android29-clang",
+      "-g",
+      "-Wall",
+      "-Ilibbpfso/out",
+      "-I./ebpf-android-sdk/include",
+      "-I./ebpf-android-sdk/vmlinux/arm64/",
+      "-c",
+      "-o",
+      "libbpfso/out/libbpfso.o",
+      "libbpfso/libbpfso.c"
+    ],
+    "directory": "/home/mi/1t/libbpf_dev",
+    "file": "/home/mi/1t/libbpf_dev/libbpfso/libbpfso.c",
+    "output": "/home/mi/1t/libbpf_dev/libbpfso/out/libbpfso.o"
+  }
+]

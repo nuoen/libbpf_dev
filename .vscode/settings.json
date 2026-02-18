@@ -1,0 +1,32 @@
+{
+  "clangd.arguments": [
+    // 在后台自动分析文件（基于 compile_commands）
+    "--background-index",
+    // 指定 compile_commands.json 所在目录（根目录）
+    "--compile-commands-dir=${workspaceFolder}",
+    // 打开 log
+    "--enable-config",
+    "-log=verbose",
+    // 并行任务数
+    "-j=4",
+    // 启用 clang-tidy
+    "--clang-tidy",
+    // 全局补全（自动补全头文件里的符号）
+    "--all-scopes-completion",
+    // 详细补全信息
+    "--completion-style=detailed",
+    // 自动补充头文件
+    "--header-insertion=iwyu",
+    // 预编译头缓存到磁盘
+    "--pch-storage=disk",
+
+    "--query-driver=/home/mi/android-ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/*",
+  ],
+
+  "[cpp]": {
+    "editor.defaultFormatter": "llvm-vs-code-extensions.vscode-clangd"
+  },
+  "[c]": {
+    "editor.defaultFormatter": "llvm-vs-code-extensions.vscode-clangd"
+  }
+}
