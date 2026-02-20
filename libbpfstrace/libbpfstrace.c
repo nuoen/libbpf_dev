@@ -32,12 +32,14 @@
 
 static volatile sig_atomic_t exiting;
 
+/* 信号处理：收到 Ctrl-C(SIGINT) 或 SIGTERM 后，让主循环退出 */
 static void sig_handler(int signo)
 {
     (void)signo;
     exiting = 1;
 }
 
+/* libbpf 日志回调：屏蔽 DEBUG，其他级别输出到 stderr */
 static int libbpf_print_fn(enum libbpf_print_level level, const char *fmt,
                            va_list args)
 {
@@ -48,6 +50,7 @@ static int libbpf_print_fn(enum libbpf_print_level level, const char *fmt,
 
 static const char *errno_name(int err)
 {
+    /* 将常见 errno 数值映射为名字，便于输出更像 strace */
     switch (err) {
     case EPERM: return "EPERM";
     case ENOENT: return "ENOENT";
@@ -90,6 +93,7 @@ static const char *errno_name(int err)
 
 static const char *futex_op_name(unsigned long long op)
 {
+    /* futex op 低 7 bit 是基础操作码，其他 bit 往往是修饰标志 */
     switch (op & 0x7f) {
     case 0:
         return "FUTEX_WAIT";
@@ -126,6 +130,7 @@ static const char *futex_op_name(unsigned long long op)
 
 static void format_sockaddr(const struct syscall_event *e, char *buf, size_t sz)
 {
+    /* BPF 侧只在 connect/bind/sendto 时尽量抓 sockaddr，失败则输出 NULL/简化信息 */
     if (!e->sa_valid) {
         snprintf(buf, sz, "NULL");
         return;
@@ -200,6 +205,7 @@ static void format_openat_flags(unsigned long long flags, char *buf, size_t sz)
 
 static const char *arg_string(const struct syscall_event *e)
 {
+    /* 仅当 BPF 侧成功抓到用户态字符串时返回 */
     if (e->str_len > 0 && e->str_len <= SYSCALL_STR_LEN)
         return e->str;
     return NULL;
@@ -207,6 +213,7 @@ static const char *arg_string(const struct syscall_event *e)
 
 static const char *syscall_name(int nr)
 {
+    /* 通过内核 uapi 的 syscall 表宏，构造 syscall nr -> 名称映射 */
     switch (nr) {
 #define __SYSCALL(n, call) case n: return #call;
 #define __SC_COMP(n, call, compat_call) __SYSCALL(n, call)
@@ -227,6 +234,10 @@ static void format_syscall_args(const struct syscall_event *e, const char *name,
 {
     const char *s;
 
+    /*
+     * 将原始 args[] 格式化成人类可读文本。
+     * 未单独适配的 syscall 走 default，打印 6 个原始参数。
+     */
     switch (e->syscall_id) {
     case __NR_read:
         snprintf(out, out_sz, "%s(fd=%llu, buf=%#llx, count=%llu)",
@@ -320,6 +331,7 @@ static int handle_event(void *ctx, void *data, size_t data_sz)
     char callbuf[512];
     char retbuf[128];
 
+    /* 内核与用户态结构体不一致时直接丢弃，避免越界读取 */
     (void)ctx;
     if (data_sz < sizeof(*e))
         return 0;
@@ -330,6 +342,7 @@ static int handle_event(void *ctx, void *data, size_t data_sz)
         name += 4;
 
     format_syscall_args(e, name, callbuf, sizeof(callbuf));
+    /* 将负返回值按 -errno 解释成错误码与错误字符串 */
     if (e->ret < 0) {
         int err = (int)-e->ret;
         snprintf(retbuf, sizeof(retbuf), "-1 %s (%s)", errno_name(err), strerror(err));
@@ -347,6 +360,7 @@ static int parse_pid(const char *s, int *pid)
     char *end = NULL;
     long v;
 
+    /* 只接受正整数且在 int32 范围内的 pid 输入 */
     errno = 0;
     v = strtol(s, &end, 10);
     if (errno || end == s || *end != '\0' || v <= 0 || v > 0x7fffffff)
@@ -360,6 +374,7 @@ static int read_proc_comm(int pid, char *buf, size_t buf_sz)
     char path[64];
     FILE *fp;
 
+    /* /proc/<pid>/comm 通常是进程名（线程组名） */
     snprintf(path, sizeof(path), "/proc/%d/comm", pid);
     fp = fopen(path, "r");
     if (!fp)
@@ -381,6 +396,7 @@ static int read_proc_cmdline(int pid, char *buf, size_t buf_sz)
     FILE *fp;
     size_t n;
 
+    /* /proc/<pid>/cmdline 以 '\0' 分隔参数，首段一般是可执行文件路径/名字 */
     snprintf(path, sizeof(path), "/proc/%d/cmdline", pid);
     fp = fopen(path, "r");
     if (!fp)
@@ -399,6 +415,7 @@ static int process_name_match(const char *target, const char *name)
 {
     size_t len = strlen(target);
 
+    /* 兼容 Android 风格的 "name:suffix"（例如多进程/子进程后缀） */
     if (strcmp(target, name) == 0)
         return 1;
     if (strncmp(target, name, len) == 0 && name[len] == ':')
@@ -414,6 +431,7 @@ static int find_pid_by_name(const char *name, int *pid)
     char comm[256];
     char cmdline[512];
 
+    /* 轮询 /proc，优先用 cmdline 匹配，失败再退回 comm 匹配 */
     dir = opendir("/proc");
     if (!dir)
         return -1;
@@ -453,14 +471,22 @@ int main(int argc, char **argv)
     int err;
     int is_pid = 0;
 
+    /*
+     * 用法：
+     *   libbpfstrace <pid|process_name>
+     * 传 pid：立即附着。
+     * 传进程名：循环扫描 /proc，直到目标出现。
+     */
     if (argc != 2) {
         fprintf(stderr, "Usage: %s <pid|process_name>\n", argv[0]);
         return 1;
     }
 
+    /* 安装退出信号，保证 poll 循环可被中断并清理资源 */
     signal(SIGINT, sig_handler);
     signal(SIGTERM, sig_handler);
 
+    /* 参数是数字则按 pid；否则按进程名等待目标启动 */
     if (parse_pid(argv[1], &target_pid) == 0) {
         is_pid = 1;
     } else {
@@ -477,29 +503,35 @@ int main(int argc, char **argv)
         printf("found process '%s' with pid=%d\n", argv[1], target_pid);
     }
 
+    /* 初始化 libbpf 行为与日志 */
     libbpf_set_strict_mode(LIBBPF_STRICT_ALL);
     libbpf_set_print(libbpf_print_fn);
 
+    /* 打开 BPF skeleton（还未 load/attach） */
     skel = libbpfstrace_bpf__open();
     if (!skel) {
         fprintf(stderr, "failed to open skeleton\n");
         return 1;
     }
 
+    /* 向 BPF rodata 写入过滤 pid，仅跟踪这个 tgid */
     skel->rodata->target_tgid = target_pid;
 
+    /* 校验并加载 BPF 程序与 map 到内核 */
     err = libbpfstrace_bpf__load(skel);
     if (err) {
         fprintf(stderr, "failed to load BPF object: %d\n", err);
         goto cleanup;
     }
 
+    /* 将 raw_tracepoint 程序挂到 sys_enter/sys_exit */
     err = libbpfstrace_bpf__attach(skel);
     if (err) {
         fprintf(stderr, "failed to attach BPF programs: %d\n", err);
         goto cleanup;
     }
 
+    /* 订阅 BPF ringbuf，内核事件到达后回调 handle_event */
     rb = ring_buffer__new(bpf_map__fd(skel->maps.events), handle_event, NULL, NULL);
     if (!rb) {
         err = -errno;
@@ -512,6 +544,7 @@ int main(int argc, char **argv)
     else
         printf("libbpfstrace started, tracing process '%s' pid=%d\n", argv[1], target_pid);
 
+    /* 主循环：poll ringbuf，不断消费内核上报的 syscall_event */
     while (!exiting) {
         err = ring_buffer__poll(rb, 200);
         if (err == -EINTR)
@@ -523,6 +556,7 @@ int main(int argc, char **argv)
     }
 
 cleanup:
+    /* 统一释放用户态资源 */
     ring_buffer__free(rb);
     libbpfstrace_bpf__destroy(skel);
     return err != 0;
